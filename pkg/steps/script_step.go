@@ -86,6 +86,9 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 				}
 				runConf.Volumes = vols
 			}
+			if privileged, ok := runner["privileged"].(bool); ok {
+				runConf.Privileged = privileged
+			}
 
 			if dindable, ok := runner["dind"].(bool); ok && dindable {
 				dockerPath := os.Getenv("DOCKER_PATH")
@@ -116,6 +119,8 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 				if dockerSock != "" {
 					runConf.Volumes = append(runConf.Volumes, fmt.Sprintf("%s:/var/run/docker.sock", dockerSock))
 				}
+
+				runConf.Privileged = true
 			}
 		} else {
 			log.Debugf("runner wasn't expected type of map: %+v", runner)
@@ -166,6 +171,7 @@ type runnerConfig struct {
 	Envfile    string
 	Env        map[string]string
 	Volumes    []string
+	Privileged bool
 }
 
 func (c runnerConfig) commandNameAndArgsToRunScript(script string, context step.ExecutionContext) (string, []string) {
@@ -223,6 +229,9 @@ tar zxvf %s.tgz 1>&2
 		}
 		if c.Entrypoint != nil {
 			dockerArgs = append(dockerArgs, "--entrypoint", *c.Entrypoint)
+		}
+		if c.Privileged != false {
+			dockerArgs = append(dockerArgs, "--privileged")
 		}
 		var args []string
 		args = append(args, dockerArgs...)
