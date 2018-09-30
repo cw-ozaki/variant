@@ -81,7 +81,7 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 			if volumes, ok := runner["volumes"].([]interface{}); ok {
 				vols := make([]string, len(volumes))
 				for i, v := range volumes {
-					vols[i] = os.ExpandEnv(v.(string))
+					vols[i] = v.(string)
 				}
 				runConf.Volumes = vols
 			}
@@ -168,7 +168,7 @@ tar zxvf %s.tgz 1>&2
 	if c.Image != "" {
 		dockerArgs := []string{}
 		for _, v := range c.Volumes {
-			dockerArgs = append(dockerArgs, "-v", v)
+			dockerArgs = append(dockerArgs, "-v", os.ExpandEnv(v))
 		}
 		if c.Envfile != "" {
 			dockerArgs = append(dockerArgs, "--env-file", c.Envfile)
@@ -203,6 +203,16 @@ func (s ScriptStep) GetName() string {
 
 func (s ScriptStep) Run(context step.ExecutionContext) (step.StepStringOutput, error) {
 	depended := len(context.Caller()) > 0
+
+	if context.Autoenv() {
+		autoEnv, err := context.GenerateAutoenv()
+		if err != nil {
+			log.Errorf("script step failed to generate autoenv: %v", err)
+		}
+		for name, value := range autoEnv {
+			os.Setenv(fmt.Sprintf("%s", name), fmt.Sprintf("%s", value))
+		}
+	}
 
 	script, err := context.Render(s.Code, s.GetName())
 	if err != nil {
@@ -247,31 +257,6 @@ func (t ScriptStep) runCommand(name string, args []string, depended bool, contex
 	ctx.Debug("script step started")
 
 	cmd := exec.Command(name, args...)
-
-	mergedEnv := map[string]string{}
-
-	for _, pair := range os.Environ() {
-		splits := strings.SplitN(pair, "=", 2)
-		key, value := splits[0], splits[1]
-		mergedEnv[key] = value
-	}
-
-	if context.Autoenv() {
-		autoEnv, err := context.GenerateAutoenv()
-		if err != nil {
-			log.Errorf("script step failed to generate autoenv: %v", err)
-		}
-		for name, value := range autoEnv {
-			mergedEnv[name] = value
-		}
-
-		cmdEnv := []string{}
-		for name, value := range mergedEnv {
-			cmdEnv = append(cmdEnv, fmt.Sprintf("%s=%s", name, value))
-		}
-
-		cmd.Env = cmdEnv
-	}
 
 	if context.Autodir() {
 		parentKey, err := context.Key().Parent()

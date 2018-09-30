@@ -1,0 +1,28 @@
+#!/usr/bin/env var
+
+tasks:
+  autoenv:
+    inputs:
+    - name: foo
+      default: "input"
+    autoenv: true
+    runner:
+      image: "alpine:3.7"
+      command: sh
+      args: [-c]
+      env:
+        FOO: ${FOO}
+    script: |
+      env | grep FOO
+  noautoenv:
+    inputs:
+    - name: foo
+      default: "input"
+    runner:
+      image: "alpine:3.7"
+      command: sh
+      args: [-c]
+      env:
+        FOO: ${FOO}
+    script: |
+      env | grep FOO
