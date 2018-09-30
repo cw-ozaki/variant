@@ -87,6 +87,36 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 				runConf.Volumes = vols
 			}
 
+			if dindable, ok := runner["dind"].(bool); ok && dindable {
+				dockerPath := os.Getenv("DOCKER_PATH")
+				if dockerPath == "" {
+					// FIXME: which docker
+					dockerPath = "/usr/local/bin/docker"
+				}
+				dockerHost := os.Getenv("DOCKER_HOST")
+				if dockerHost == "" {
+					// FIXME' find docker sock
+					dockerHost = "unix:///var/run/docker.sock"
+				}
+				dockerSock := ""
+				if strings.HasSuffix(dockerHost, ".sock") {
+					dockerSock = strings.TrimPrefix(dockerHost, "unix://")
+				}
+
+				if runConf.Env == nil {
+					runConf.Env = make(map[string]string, 0)
+				}
+				runConf.Env["DOCKER_PATH"] = dockerPath
+				runConf.Env["DOCKER_HOST"] = dockerHost
+
+				if runConf.Volumes == nil {
+					runConf.Volumes = make([]string, 0)
+				}
+				runConf.Volumes = append(runConf.Volumes, fmt.Sprintf("%s:/usr/local/bin/docker", dockerPath))
+				if dockerSock != "" {
+					runConf.Volumes = append(runConf.Volumes, fmt.Sprintf("%s:/var/run/docker.sock", dockerSock))
+				}
+			}
 		} else {
 			log.Debugf("runner wasn't expected type of map: %+v", runner)
 		}
