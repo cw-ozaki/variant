@@ -78,7 +78,6 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 				}
 				runConf.Env = env
 			}
-
 			if volumes, ok := runner["volumes"].([]interface{}); ok {
 				vols := make([]string, len(volumes))
 				for i, v := range volumes {
@@ -88,6 +87,9 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 			}
 			if privileged, ok := runner["privileged"].(bool); ok {
 				runConf.Privileged = privileged
+			}
+			if workdir, ok := runner["workdir"].(string); ok {
+				runConf.Workdir = workdir
 			}
 
 			if dindable, ok := runner["dind"].(bool); ok && dindable {
@@ -121,6 +123,40 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 				}
 
 				runConf.Privileged = true
+			}
+
+			if injectable, ok := runner["variant"].(bool); ok && injectable {
+				varPath := os.Getenv("VAR_PATH")
+				if varPath == "" {
+					path, err := os.Executable()
+					if err != nil {
+						panic(fmt.Errorf("failed get executable path"))
+					}
+					varPath = path
+				}
+				varCwd := os.Getenv("VAR_CWD")
+				if varCwd == "" {
+					cwd, err := os.Getwd()
+					if err != nil {
+						panic(fmt.Errorf("failed get current directory"))
+					}
+					varCwd = cwd
+				}
+
+				if runConf.Env == nil {
+					runConf.Env = make(map[string]string, 0)
+				}
+				runConf.Env["VAR_PATH"] = varPath
+				runConf.Env["VAR_CWD"] = varCwd
+
+				if runConf.Volumes == nil {
+					runConf.Volumes = make([]string, 0)
+				}
+				runConf.Volumes = append(runConf.Volumes,
+					fmt.Sprintf("%s:/usr/local/bin/var", varPath),
+					fmt.Sprintf("%s:/usr/local/bin/variant", varPath),
+					fmt.Sprintf("%s:/variant", varCwd))
+				runConf.Workdir = "/variant"
 			}
 		} else {
 			log.Debugf("runner wasn't expected type of map: %+v", runner)
@@ -172,6 +208,7 @@ type runnerConfig struct {
 	Env        map[string]string
 	Volumes    []string
 	Privileged bool
+	Workdir	   string
 }
 
 func (c runnerConfig) commandNameAndArgsToRunScript(script string, context step.ExecutionContext) (string, []string) {
@@ -232,6 +269,9 @@ tar zxvf %s.tgz 1>&2
 		}
 		if c.Privileged != false {
 			dockerArgs = append(dockerArgs, "--privileged")
+		}
+		if c.Workdir != "" {
+			dockerArgs = append(dockerArgs, "--workdir", c.Workdir)
 		}
 		var args []string
 		args = append(args, dockerArgs...)
