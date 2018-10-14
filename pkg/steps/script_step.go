@@ -91,6 +91,9 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 			if workdir, ok := runner["workdir"].(string); ok {
 				runConf.Workdir = workdir
 			}
+			if net, ok := runner["net"].(string); ok {
+				runConf.Net = net
+			}
 
 			if dindable, ok := runner["dind"].(bool); ok && dindable {
 				dockerPath := os.Getenv("DOCKER_PATH")
@@ -209,6 +212,7 @@ type runnerConfig struct {
 	Volumes    []string
 	Privileged bool
 	Workdir    string
+	Net        string
 }
 
 func (c runnerConfig) commandNameAndArgsToRunScript(script string, context step.ExecutionContext) (string, []string) {
@@ -272,6 +276,9 @@ tar zxvf %s.tgz 1>&2
 		}
 		if c.Workdir != "" {
 			dockerArgs = append(dockerArgs, "--workdir", c.Workdir)
+		}
+		if c.Net != "" {
+			dockerArgs = append(dockerArgs, "--net", c.Net)
 		}
 		var args []string
 		args = append(args, dockerArgs...)
