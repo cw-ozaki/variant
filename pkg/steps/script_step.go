@@ -62,18 +62,104 @@ func (l ScriptStepLoader) LoadStep(def step.StepDef, context step.LoadingContext
 				Args:      args,
 				Artifacts: artifacts,
 			}
+			if entrypoint, ok := runner["entrypoint"].(string); ok {
+				runConf.Entrypoint = &entrypoint
+			}
 			if command, ok := runner["command"].(string); ok {
 				runConf.Command = command
 			}
 			if envfile, ok := runner["envfile"].(string); ok {
 				runConf.Envfile = envfile
 			}
+			if environments, ok := runner["env"].(map[interface{}]interface{}); ok {
+				env := make(map[string]string, len(environments))
+				for k, v := range environments {
+					env[k.(string)] = v.(string)
+				}
+				runConf.Env = env
+			}
 			if volumes, ok := runner["volumes"].([]interface{}); ok {
 				vols := make([]string, len(volumes))
 				for i, v := range volumes {
-					vols[i] = os.ExpandEnv(v.(string))
+					vols[i] = v.(string)
 				}
 				runConf.Volumes = vols
+			}
+			if privileged, ok := runner["privileged"].(bool); ok {
+				runConf.Privileged = privileged
+			}
+			if workdir, ok := runner["workdir"].(string); ok {
+				runConf.Workdir = workdir
+			}
+			if net, ok := runner["net"].(string); ok {
+				runConf.Net = net
+			}
+
+			if dindable, ok := runner["dind"].(bool); ok && dindable {
+				dockerPath := os.Getenv("DOCKER_PATH")
+				if dockerPath == "" {
+					// FIXME: which docker
+					dockerPath = "/usr/local/bin/docker"
+				}
+				dockerHost := os.Getenv("DOCKER_HOST")
+				if dockerHost == "" {
+					// FIXME' find docker sock
+					dockerHost = "unix:///var/run/docker.sock"
+				}
+				dockerSock := ""
+				if strings.HasSuffix(dockerHost, ".sock") {
+					dockerSock = strings.TrimPrefix(dockerHost, "unix://")
+				}
+
+				if runConf.Env == nil {
+					runConf.Env = make(map[string]string, 0)
+				}
+				runConf.Env["DOCKER_PATH"] = dockerPath
+				runConf.Env["DOCKER_HOST"] = dockerHost
+
+				if runConf.Volumes == nil {
+					runConf.Volumes = make([]string, 0)
+				}
+				runConf.Volumes = append(runConf.Volumes, fmt.Sprintf("%s:/usr/local/bin/docker", dockerPath))
+				if dockerSock != "" {
+					runConf.Volumes = append(runConf.Volumes, fmt.Sprintf("%s:/var/run/docker.sock", dockerSock))
+				}
+
+				runConf.Privileged = true
+			}
+
+			if injectable, ok := runner["variant"].(bool); ok && injectable {
+				varPath := os.Getenv("VAR_PATH")
+				if varPath == "" {
+					path, err := os.Executable()
+					if err != nil {
+						panic(fmt.Errorf("failed get executable path"))
+					}
+					varPath = path
+				}
+				varCwd := os.Getenv("VAR_CWD")
+				if varCwd == "" {
+					cwd, err := os.Getwd()
+					if err != nil {
+						panic(fmt.Errorf("failed get current directory"))
+					}
+					varCwd = cwd
+				}
+
+				if runConf.Env == nil {
+					runConf.Env = make(map[string]string, 0)
+				}
+				runConf.Env["VAR_PATH"] = varPath
+				runConf.Env["VAR_CWD"] = varCwd
+
+				if runConf.Volumes == nil {
+					runConf.Volumes = make([]string, 0)
+				}
+				runConf.Volumes = append(runConf.Volumes,
+					fmt.Sprintf("%s:/usr/local/bin/var", varPath),
+					fmt.Sprintf("%s:/usr/local/bin/variant", varPath),
+					fmt.Sprintf("%s:/variant", varCwd))
+				runConf.Workdir = "/variant"
 			}
 		} else {
 			log.Debugf("runner wasn't expected type of map: %+v", runner)
@@ -116,12 +202,17 @@ type Artifact struct {
 }
 
 type runnerConfig struct {
-	Image     string
-	Command   string
-	Artifacts []Artifact
-	Args      []string
-	Envfile   string
-	Volumes   []string
+	Image      string
+	Command    string
+	Entrypoint *string
+	Artifacts  []Artifact
+	Args       []string
+	Envfile    string
+	Env        map[string]string
+	Volumes    []string
+	Privileged bool
+	Workdir    string
+	Net        string
 }
 
 func (c runnerConfig) commandNameAndArgsToRunScript(script string, context step.ExecutionContext) (string, []string) {
@@ -154,18 +245,47 @@ tar zxvf %s.tgz 1>&2
 	}
 
 	if c.Image != "" {
+		if context.Autoenv() {
+			autoEnv, err := context.GenerateAutoenv()
+			if err != nil {
+				log.Errorf("script step failed to generate autoenv with docker run: %v", err)
+			}
+			if c.Env == nil {
+				c.Env = make(map[string]string, len(autoEnv))
+			}
+			for k, v := range autoEnv {
+				c.Env[k] = v
+			}
+		}
+
 		dockerArgs := []string{}
 		for _, v := range c.Volumes {
-			dockerArgs = append(dockerArgs, "-v", v)
+			dockerArgs = append(dockerArgs, "-v", os.ExpandEnv(v))
+		}
+		for k, v := range c.Env {
+			dockerArgs = append(dockerArgs, "-e", fmt.Sprintf("%s=%s", k, os.ExpandEnv(v)))
 		}
 		if c.Envfile != "" {
-			dockerArgs = append(dockerArgs, "--env-file", c.Envfile)
+			dockerArgs = append(dockerArgs, "--env-file", os.ExpandEnv(c.Envfile))
+		}
+		if c.Entrypoint != nil {
+			dockerArgs = append(dockerArgs, "--entrypoint", *c.Entrypoint)
+		}
+		if c.Privileged != false {
+			dockerArgs = append(dockerArgs, "--privileged")
+		}
+		if c.Workdir != "" {
+			dockerArgs = append(dockerArgs, "--workdir", c.Workdir)
+		}
+		if c.Net != "" {
+			dockerArgs = append(dockerArgs, "--net", c.Net)
 		}
 		var args []string
 		args = append(args, dockerArgs...)
 		args = append(args, c.Image)
 		args = append(args, cmd)
 		args = append(args, cmdArgs...)
+
 		return "docker", append([]string{"run", "--rm", "-i"}, args...)
 	} else {
 		return cmd, cmdArgs
@@ -182,6 +302,16 @@ func (s ScriptStep) GetName() string {
 
 func (s ScriptStep) Run(context step.ExecutionContext) (step.StepStringOutput, error) {
 	depended := len(context.Caller()) > 0
+
+	if context.Autoenv() {
+		autoEnv, err := context.GenerateAutoenv()
+		if err != nil {
+			log.Errorf("script step failed to generate autoenv: %v", err)
+		}
+		for name, value := range autoEnv {
+			os.Setenv(fmt.Sprintf("%s", name), fmt.Sprintf("%s", value))
+		}
+	}
 
 	script, err := context.Render(s.Code, s.GetName())
 	if err != nil {
@@ -233,23 +363,6 @@ func (t ScriptStep) runCommand(name string, args []string, depended bool, contex
 		splits := strings.SplitN(pair, "=", 2)
 		key, value := splits[0], splits[1]
 		mergedEnv[key] = value
-	}
-
-	if context.Autoenv() {
-		autoEnv, err := context.GenerateAutoenv()
-		if err != nil {
-			log.Errorf("script step failed to generate autoenv: %v", err)
-		}
-		for name, value := range autoEnv {
-			mergedEnv[name] = value
-		}
-
-		cmdEnv := []string{}
-		for name, value := range mergedEnv {
-			cmdEnv = append(cmdEnv, fmt.Sprintf("%s=%s", name, value))
-		}
-
-		cmd.Env = cmdEnv
 	}
 
 	if context.Autodir() {

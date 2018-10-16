@@ -1,0 +1,14 @@
+#!/usr/bin/env var
+
+tasks:
+  inject:
+    runner:
+      image: "alpine:3.7"
+      command: sh
+      args: [-c]
+      variant: true
+    script: |
+      ./containerized-task-variant-inject task1 --logtostderr
+  task1:
+    script: |
+      echo "call task1"

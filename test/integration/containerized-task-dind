@@ -1,0 +1,12 @@
+#!/usr/bin/env var
+
+tasks:
+  dind:
+    runner:
+      image: "alpine:3.7"
+      command: sh
+      args: [-c]
+      dind: true
+    script: |
+      docker images
+      
